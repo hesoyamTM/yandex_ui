@@ -21,7 +21,7 @@ export default function DrawingCanvas() {
   // Инициализация WebSocket и canvas
   useEffect(() => {
     // Подключаемся к WebSocket
-    const ws = new WebSocket('ws://26.57.252.134:1323/ws/drawing');
+    const ws = new WebSocket('/api/ws/drawing');
     wsRef.current = ws;
 
     ws.onopen = () => {
@@ -30,8 +30,18 @@ export default function DrawingCanvas() {
     };
 
     ws.onmessage = (event) => {
-      const receivedPixels: Pixel[] = JSON.parse(event.data);
-      drawPixels(receivedPixels);
+      if (event.data instanceof Blob) {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const pixels = new Uint8Array(reader.result as ArrayBuffer);
+          InitCanvas(1280, 720, pixels);
+        };
+        reader.readAsArrayBuffer(event.data);
+      }
+      else {
+        const receivedPixels: Pixel[] = JSON.parse(event.data);
+        drawPixels(receivedPixels);
+      }
     };
 
     ws.onerror = (error) => {
@@ -58,6 +68,24 @@ export default function DrawingCanvas() {
     };
   }, []);
 
+  const InitCanvas = (
+    width: number,
+    height: number,
+    pixels: Uint8Array
+  ) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const imageData = ctx.createImageData(width, height);
+    for (let i = 0; i < pixels.length; i++) {
+      imageData.data[i] = pixels[i]; // Копирование RGBA-данных
+    }
+    ctx.putImageData(imageData, 0, 0);
+  };
+
   const drawPixels = (pixels: Pixel[]) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -68,51 +96,25 @@ export default function DrawingCanvas() {
     context.lineCap = 'round';
     context.lineJoin = 'round';
 
-    // Оптимизация: группируем пиксели по цвету и размеру
-    const groupedPixels: Record<string, Pixel[]> = {};
-    
+    // Рисуем каждый пиксель отдельно
     pixels.forEach(pixel => {
-      const key = `${pixel.color}-${pixel.size}`;
-      if (!groupedPixels[key]) {
-        groupedPixels[key] = [];
-      }
-      groupedPixels[key].push(pixel);
-    });
+        context.strokeStyle = pixel.color;
+        context.lineWidth = pixel.size;
+        context.fillStyle = pixel.color;
 
-    // Рисуем сгруппированные пиксели
-    Object.entries(groupedPixels).forEach(([key, pixels]) => {
-      const [color, sizeStr] = key.split('-');
-      const size = parseInt(sizeStr);
-      
-      context.strokeStyle = color;
-      context.lineWidth = size;
-      context.fillStyle = color;
-
-      // Рисуем линии между последовательными точками
-      context.beginPath();
-      context.moveTo(pixels[0].x, pixels[0].y);
-      
-      for (let i = 1; i < pixels.length; i++) {
-        context.lineTo(pixels[i].x, pixels[i].y);
-      }
-      
-      context.stroke();
-
-      // Рисуем круги в каждой точке для более плавного вида
-      pixels.forEach(pixel => {
+        // Рисуем точку
         context.beginPath();
-        context.arc(pixel.x, pixel.y, size/2, 0, Math.PI * 2);
+        context.arc(pixel.x, pixel.y, pixel.size/2, 0, Math.PI * 2);
         context.fill();
-      });
     });
-  };
+};
 
   const getIntermediatePixels = (start: {x: number, y: number}, end: {x: number, y: number}): Pixel[] => {
     const pixels: Pixel[] = [];
     const dx = end.x - start.x;
     const dy = end.y - start.y;
     const distance = Math.sqrt(dx * dx + dy * dy);
-    const steps = Math.max(1, Math.floor(distance / (brushSize / 3))); // Более частые точки
+    const steps = Math.max(20, Math.floor(distance / (brushSize / 3))); // Более частые точки
 
     for (let i = 0; i <= steps; i++) {
       const t = steps === 0 ? 0 : i / steps;
@@ -134,12 +136,6 @@ export default function DrawingCanvas() {
     
     setIsDrawing(true);
     setPrevPos({ x, y });
-
-    // Создаем и отправляем первый пиксель
-    const pixel = { size: brushSize, color: brushColor, x, y };
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify([pixel]));
-    }
   };
 
   const draw = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -190,18 +186,6 @@ export default function DrawingCanvas() {
     setPrevPos(null);
   };
 
-  const clearCanvas = () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    
-    const context = canvas.getContext('2d');
-    if (!context) return;
-    
-    context.clearRect(0, 0, canvas.width, canvas.height);
-    context.fillStyle = '#FFFFFF';
-    context.fillRect(0, 0, canvas.width, canvas.height);
-  };
-
   return (
     <div className="flex flex-col items-center p-4">
       <div className="mb-4 flex gap-4 items-center">
@@ -211,7 +195,7 @@ export default function DrawingCanvas() {
             id="brush-size"
             type="range"
             min="1"
-            max="50"
+            max="500"
             value={brushSize}
             onChange={(e) => setBrushSize(parseInt(e.target.value))}
             className="w-32"
@@ -229,13 +213,6 @@ export default function DrawingCanvas() {
             className="h-10 w-10"
           />
         </div>
-        
-        <button
-          onClick={clearCanvas}
-          className="px-4 py-2 bg-gray-200 rounded hover:bg-gray-300"
-        >
-          Очистить
-        </button>
         
         <div className={`px-3 py-1 rounded ${isConnected ? 'bg-green-200' : 'bg-red-200'}`}>
           {isConnected ? 'Подключено' : 'Отключено'}
