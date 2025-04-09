@@ -9,7 +9,12 @@ type Pixel = {
   y: number;
 };
 
-export default function DrawingCanvas() {
+interface Props {
+  canvasId: string
+  className?: string;
+}
+
+export const DrawingCanvas: React.FC<Props> = ({ canvasId, className }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
@@ -17,74 +22,87 @@ export default function DrawingCanvas() {
   const [brushColor, setBrushColor] = useState('#000000');
   const [prevPos, setPrevPos] = useState<{x: number, y: number} | null>(null);
   const [isConnected, setIsConnected] = useState(false);
+  const width = 1280; // Ширина изображения
+  const height = 720; // Высота изображения
 
   // Инициализация WebSocket и canvas
   useEffect(() => {
-    // Подключаемся к WebSocket
-    const ws = new WebSocket('/api/ws/drawing');
-    wsRef.current = ws;
+    const loadAndDrawImage = async () => {
+      try {
+        // 1. Получаем бинарные RGBA-данные
+        const response = await fetch(`/api/getCanvas/${canvasId}`);
+        if (!response.ok) throw new Error('Ошибка загрузки данных');
+        
+        const buffer = await response.arrayBuffer();
+        const pixels = new Uint8ClampedArray(buffer);
 
-    ws.onopen = () => {
-      console.log('Connected to WebSocket');
-      setIsConnected(true);
-    };
+        // 2. Создаем ImageData
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        
+        canvas.width = width;
+        canvas.height = height;
+        
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
 
-    ws.onmessage = (event) => {
-      if (event.data instanceof Blob) {
-        const reader = new FileReader();
-        reader.onload = () => {
-          const pixels = new Uint8Array(reader.result as ArrayBuffer);
-          InitCanvas(1280, 720, pixels);
-        };
-        reader.readAsArrayBuffer(event.data);
+        const imageData = new ImageData(
+          new Uint8ClampedArray(pixels),
+          width,
+          height
+        );
+
+        // 3. Рисуем на Canvas
+        ctx.putImageData(imageData, 0, 0);
+
+      } catch (error) {
+        console.error('Ошибка:', error);
       }
-      else {
+
+      // Подключаемся к WebSocket
+      const ws = new WebSocket(`/api/ws/drawing/${canvasId}`);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        console.log('Connected to WebSocket');
+        setIsConnected(true);
+      };
+
+      ws.onmessage = (event) => {
         const receivedPixels: Pixel[] = JSON.parse(event.data);
         drawPixels(receivedPixels);
-      }
+      };
+
+      ws.onerror = (error) => {
+        console.error('WebSocket error:', error);
+      };
+
+      ws.onclose = () => {
+        console.log('Disconnected from WebSocket');
+        setIsConnected(false);
+      };
     };
 
-    ws.onerror = (error) => {
-      console.error('WebSocket error:', error);
-    };
-
-    ws.onclose = () => {
-      console.log('Disconnected from WebSocket');
-      setIsConnected(false);
-    };
-
-    // Инициализация canvas
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    
-    const context = canvas.getContext('2d');
-    if (!context) return;
-    
-    context.fillStyle = '#FFFFFF';
-    context.fillRect(0, 0, canvas.width, canvas.height);
-
-    return () => {
-      ws.close();
-    };
+    loadAndDrawImage();
   }, []);
 
-  const InitCanvas = (
-    width: number,
-    height: number,
-    pixels: Uint8Array
-  ) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+  // const InitCanvas = (
+  //   width: number,
+  //   height: number,
+  //   pixels: Uint8Array
+  // ) => {
+  //   const canvas = canvasRef.current;
+  //   if (!canvas) return;
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+  //   const ctx = canvas.getContext('2d');
+  //   if (!ctx) return;
 
-    const imageData = ctx.createImageData(width, height);
-    for (let i = 0; i < pixels.length; i++) {
-      imageData.data[i] = pixels[i]; // Копирование RGBA-данных
-    }
-    ctx.putImageData(imageData, 0, 0);
-  };
+  //   const imageData = ctx.createImageData(width, height);
+  //   for (let i = 0; i < pixels.length; i++) {
+  //     imageData.data[i] = pixels[i]; // Копирование RGBA-данных
+  //   }
+  //   ctx.putImageData(imageData, 0, 0);
+  // };
 
   const drawPixels = (pixels: Pixel[]) => {
     const canvas = canvasRef.current;
